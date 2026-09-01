@@ -1,0 +1,270 @@
+{
+    "tool": "ffmpeg",
+    "binary": "ffmpeg",
+    "argStyle": "space",
+    "blurb": "Convert, compress, and edit video/audio files from the command line.",
+    "flags": [
+        {
+            "flag": "-i",
+            "kind": "standard",
+            "label": "Input File",
+            "type": "file",
+            "required": true,
+            "advanced": false,
+            "plainEnglish": "The video or audio file you want to process.",
+            "validation": {
+                "fileMustExist": true
+            }
+        },
+        {
+            "flag": "-vf:scale",
+            "kind": "templated",
+            "label": "Resize / Scale",
+            "type": "enum",
+            "enum": [
+                "__unset__",
+                "1920:-1",
+                "1280:-1",
+                "854:-1",
+                "640:-1"
+            ],
+            "enumLabels": [
+                "No change",
+                "1080p width",
+                "720p width",
+                "480p width",
+                "360p width"
+            ],
+            "default": "__unset__",
+            "advanced": false,
+            "plainEnglish": "Shrinks the video's resolution. Smaller = faster processing and smaller file size.",
+            "argTemplate": "-vf scale={value}",
+            "unsetSentinel": "__unset__"
+        },
+        {
+            "flag": "-crf",
+            "kind": "standard",
+            "label": "Video Quality",
+            "type": "number",
+            "range": [
+                0,
+                51
+            ],
+            "default": 23,
+            "advanced": false,
+            "plainEnglish": "Lower number = better quality, bigger file. 18-28 is normal. 23 is a good default.",
+            "validation": {
+                "conflictsWith": [
+                    "-q:v"
+                ]
+            }
+        },
+        {
+            "flag": "-preset",
+            "kind": "standard",
+            "label": "Encoding Speed",
+            "type": "enum",
+            "enum": [
+                "ultrafast",
+                "fast",
+                "medium",
+                "slow",
+                "veryslow"
+            ],
+            "default": "medium",
+            "advanced": false,
+            "plainEnglish": "Slower presets compress more efficiently (smaller file at same quality) but take longer to run."
+        },
+        {
+            "flag": "-vn",
+            "kind": "boolean",
+            "label": "Remove Video (audio only)",
+            "type": "boolean",
+            "default": false,
+            "advanced": false,
+            "plainEnglish": "Strips out the video track entirely — use this to extract just the audio.",
+            "validation": {
+                "conflictsWith": [
+                    "-vf:scale",
+                    "-crf",
+                    "-preset",
+                    "-an"
+                ]
+            }
+        },
+        {
+            "flag": "-an",
+            "kind": "boolean",
+            "label": "Remove Audio",
+            "type": "boolean",
+            "default": false,
+            "advanced": true,
+            "plainEnglish": "Strips out the audio track, keeping only video (e.g. for silent GIF-style clips)."
+        },
+        {
+            "flag": "-ss",
+            "kind": "standard",
+            "label": "Start Time",
+            "type": "string",
+            "default": "",
+            "advanced": true,
+            "plainEnglish": "Skip to this timestamp before processing (e.g. 00:00:30 for 30 seconds in). Leave blank to start from the beginning.",
+            "validation": {
+                "pattern": "^$|^\\d{2}:\\d{2}:\\d{2}$"
+            },
+            "unsetSentinel": ""
+        },
+        {
+            "flag": "-t",
+            "kind": "standard",
+            "label": "Duration",
+            "type": "string",
+            "default": "",
+            "advanced": true,
+            "plainEnglish": "How long a clip to process, e.g. 00:00:10 for 10 seconds. Leave blank to go to the end of the file.",
+            "validation": {
+                "pattern": "^$|^\\d{2}:\\d{2}:\\d{2}$"
+            },
+            "unsetSentinel": ""
+        },
+        {
+            "flag": "-q:v",
+            "kind": "standard",
+            "label": "Simple Quality (alt to CRF)",
+            "type": "number",
+            "range": [
+                1,
+                31
+            ],
+            "optional": true,
+            "enabled": false,
+            "advanced": true,
+            "plainEnglish": "Alternate quality control, mainly used for image/GIF output. Lower = better quality. Rarely needed if you're already using Video Quality (CRF). Disabled by default — enable to override."
+        },
+        {
+            "flag": "-r",
+            "kind": "standard",
+            "label": "Frame Rate",
+            "type": "number",
+            "range": [
+                1,
+                120
+            ],
+            "optional": true,
+            "enabled": false,
+            "advanced": true,
+            "plainEnglish": "Frames per second in the output. Disabled by default, which keeps the source's original frame rate. Enable to override."
+        },
+        {
+            "flag": "-ar",
+            "kind": "standard",
+            "label": "Audio Sample Rate",
+            "type": "enum",
+            "enum": [
+                "__unset__",
+                "44100",
+                "48000",
+                "22050"
+            ],
+            "enumLabels": [
+                "Default (keep source)",
+                "44100 Hz",
+                "48000 Hz",
+                "22050 Hz"
+            ],
+            "default": "__unset__",
+            "unsetSentinel": "__unset__",
+            "advanced": true,
+            "plainEnglish": "Audio quality setting in Hz. 44100 is the standard for music, 48000 for video."
+        },
+        {
+            "flag": "-b:a",
+            "kind": "standard",
+            "label": "Audio Bitrate",
+            "type": "enum",
+            "enum": [
+                "128k",
+                "192k",
+                "256k",
+                "320k"
+            ],
+            "default": "192k",
+            "advanced": true,
+            "plainEnglish": "Higher bitrate = better audio quality, bigger file. 192k is a solid default for most uses."
+        },
+        {
+            "flag": "output",
+            "kind": "positional",
+            "label": "Output File Name",
+            "type": "string",
+            "required": true,
+            "advanced": false,
+            "plainEnglish": "The name for the finished file. Saved automatically to your CLIFace output folder.",
+            "validation": {
+                "pattern": "^(?!-)[^/\\\\]+\\.[a-zA-Z0-9]+$"
+            }
+        }
+    ],
+    "presets": [
+        {
+            "name": "Compress video for email",
+            "description": "Shrinks file size while keeping it watchable — good for attaching to emails or Slack.",
+            "values": {
+                "-vf:scale": "1280:-1",
+                "-crf": 28,
+                "-preset": "medium",
+                "output": "compressed.mp4"
+            }
+        },
+        {
+            "name": "Convert video to MP3",
+            "description": "Extracts just the audio track from a video file.",
+            "values": {
+                "-vn": true,
+                "-b:a": "192k",
+                "output": "audio.mp3"
+            },
+            "testNote": "Relies on ffmpeg inferring the mp3 encoder (libmp3lame) from the .mp3 output extension rather than an explicit -c:a flag. This is usually reliable but version-dependent — verify with a real run during Milestone 1 testing, add explicit -c:a libmp3lame if inference ever fails."
+        },
+        {
+            "name": "Extract a short clip",
+            "description": "Cuts a section out of a longer video without re-encoding the whole thing.",
+            "values": {
+                "-ss": "00:00:00",
+                "-t": "00:00:10",
+                "output": "clip.mp4"
+            }
+        },
+        {
+            "name": "High quality archive copy",
+            "description": "Keeps quality as close to the original as possible, larger file size.",
+            "values": {
+                "-crf": 18,
+                "-preset": "slow",
+                "output": "archive.mp4"
+            }
+        },
+        {
+            "name": "Small file for messaging apps",
+            "description": "Aggressively compresses for platforms with strict size limits (e.g. WhatsApp, Discord).",
+            "values": {
+                "-vf:scale": "640:-1",
+                "-crf": 32,
+                "-preset": "fast",
+                "output": "small.mp4"
+            }
+        }
+    ],
+    "notes": {
+        "-vf:scale": "This is a synthetic flag name (not a real ffmpeg flag) representing one specific use of -vf. Real ffmpeg -vf accepts arbitrary filter chains; v1 only exposes the 'scale' filter as a friendly dropdown. buildArgsArray must expand -vf:scale into the real ['-vf', 'scale=1280:-1'] pair via argTemplate, not pass '-vf:scale' literally to spawn.",
+        "output": "Not a real flag — it's the positional output filename argument ffmpeg expects last. Schema-to-args logic needs to treat 'output' as a special positional field, appended at the end of the args array, not as a '-flag value' pair.",
+        "convention:unset-enum": "Any optional enum flag includes an explicit sentinel value (unsetSentinel, e.g. '__unset__') as one of its enum options, always rendered as the first/default choice with a label like 'Default (no change)'. buildArgsArray skips the flag entirely — including any argTemplate expansion — when the selected value equals unsetSentinel. This is the ONLY way to represent 'don't pass this flag' for enum types; never rely on default: null, since there's no UI affordance for null in a dropdown.",
+        "convention:unset-number": "Any optional number flag is paired with optional: true and enabled: false by default. The numeric input stays disabled/greyed out in the form until the user explicitly enables it. buildArgsArray skips the flag entirely when enabled is false, regardless of what value sits in the (disabled) input. This is the numeric-type equivalent of convention:unset-enum.",
+        "convention:conflicts-symmetric": "conflictsWith is treated as symmetric by the validator regardless of which flag declares it — if A lists B, the form disables B whenever A is set and vice versa, even though only A's schema entry mentions the relationship. Schema authors declare each conflicting pair on exactly one side, never both, to avoid drift between two hand-maintained copies of the same fact. Ordering rule: declare the conflict on the 'primary'/basic flag's entry (e.g. -crf, not -q:v), so the canonical declaration always lives on the flag a user is more likely to touch first.",
+        "convention:always-on-defaults": "Not every advanced flag follows the unset-sentinel/disabled-by-default pattern. -b:a has a real default (192k) and is always passed, even if the user never touches it — deliberate, since audio bitrate benefits from an explicit value and 192k is a safe universal default. The unset/disabled pattern is reserved for flags where 'not passing this at all' has distinct real meaning to ffmpeg (e.g. -ar unset lets ffmpeg keep the source's native sample rate, which isn't the same as picking one explicitly).",
+        "convention:explicit-kind": "Every flag declares its own kind (standard | boolean | templated | positional) as an explicit schema field. buildArgsArray dispatches on this declared value directly — it never infers kind from other signals (e.g. flag === 'output', or presence of argTemplate), because inference just relocates the same ad hoc per-flag branching into a second hidden function instead of eliminating it. Schema authors for future tools must set kind explicitly on every flag; there is no default.",
+        "known-limitation:flag-ordering": "buildArgsArray outputs non-positional flags in schema-definition order. ffmpeg is order-sensitive in ways this schema doesn't encode — most notably, -ss placed before -i triggers fast input-seeking, while -ss placed after -i (the current schema order, since -i is defined first) falls back to slower filter-based seeking. Both produce correct output; only speed differs. This is a deliberate v1 simplification, not a bug: schema-definition order is treated as good enough for v1's flag set. Flagged as a known limitation for a v1.1 pass — a future version could add an explicit 'order' or 'position' field per flag if seek performance on the 'Extract a short clip' preset becomes a real complaint, rather than relying on schema-definition order as an implicit ordering mechanism.",
+        "convention:unset-string": "A string-type flag whose value equals the empty string is treated as unset, exactly like the enum unsetSentinel convention, achieved by setting unsetSentinel: \"\" on that flag (e.g. -ss, -t). buildArgsArray skips it entirely rather than pushing a broken empty-string argument like ['-ss', '']. This is the string-type equivalent of convention:unset-enum, using the same unsetSentinel mechanism rather than a new one.",
+        "convention:required-missing": "A flag marked required: true that resolves to no value at all (undefined/empty, no schema default) throws a RequiredFieldError rather than silently producing an incomplete command (e.g. an ffmpeg invocation missing -i entirely). Same reasoning as ConflictError: this path should be structurally unreachable if the form renderer enforces required fields, so a thrown error surfaces a renderer bug loudly instead of silently shipping a broken command."
+    }
+}
