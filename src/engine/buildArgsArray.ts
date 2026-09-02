@@ -24,9 +24,9 @@ export class RequiredFieldError extends Error {
     }
 }
 
-type FlagKind = "standard" | "boolean" | "templated" | "positional";
+export type FlagKind = "standard" | "boolean" | "templated" | "positional";
 
-interface FlagSchema {
+export interface FlagSchema {
     flag: string;
     kind: FlagKind;
     type: string;
@@ -47,9 +47,9 @@ export interface ToolSchema {
     [key: string]: unknown;
 }
 
-type FormValues = Record<string, unknown>;
+export type FormValues = Record<string, unknown>;
 
-interface Resolved {
+export interface Resolved {
     value: unknown;
     enabled: boolean;
 }
@@ -60,7 +60,7 @@ interface Resolved {
  *  - optional numbers: value/enabled live together as { value, enabled } in formValues
  *  - everything else: falls back to schema.default when formValues omits the key entirely
  */
-function resolveValue(flagSchema: FlagSchema, formValues: FormValues): Resolved {
+export function resolveValue(flagSchema: FlagSchema, formValues: FormValues): Resolved {
     const raw = formValues[flagSchema.flag];
 
     if (flagSchema.optional) {
@@ -115,7 +115,14 @@ function clamp(value: number, range?: [number, number]): number {
  * Whether a flag is "active" for the purposes of conflictsWith checking — i.e. it will
  * actually be emitted with a real, user-meaningful value, not skipped/defaulted-away.
  */
-function isActive(flagSchema: FlagSchema, resolved: Resolved): boolean {
+/**
+ * Whether a flag is "active" for the purposes of conflictsWith checking — i.e. it will
+ * actually be emitted with a real, user-meaningful value, not skipped/defaulted-away.
+ * Exported as isFlagActive: the form renderer (Milestone 1b) must reuse this exact
+ * function for its own conflict-disabling logic and canBuildArgs/hasActiveConflicts,
+ * rather than reimplementing "is this flag active" a second time.
+ */
+export function isFlagActive(flagSchema: FlagSchema, resolved: Resolved): boolean {
     if (flagSchema.kind === "boolean") return resolved.value === true;
     if (flagSchema.optional) return resolved.enabled === true;
     if (flagSchema.unsetSentinel !== undefined) return resolved.value !== flagSchema.unsetSentinel;
@@ -135,13 +142,13 @@ export function buildArgsArray(schema: ToolSchema, formValues: FormValues): stri
         if (!conflicts || conflicts.length === 0) continue;
 
         const resolvedSelf = resolvedByFlag.get(flagSchema.flag)!;
-        if (!isActive(flagSchema, resolvedSelf)) continue;
+        if (!isFlagActive(flagSchema, resolvedSelf)) continue;
 
         for (const otherFlagName of conflicts) {
             const otherSchema = schema.flags.find((f) => f.flag === otherFlagName);
             if (!otherSchema) continue;
             const resolvedOther = resolvedByFlag.get(otherFlagName)!;
-            if (isActive(otherSchema, resolvedOther)) {
+            if (isFlagActive(otherSchema, resolvedOther)) {
                 throw new ConflictError(flagSchema.flag, otherFlagName);
             }
         }

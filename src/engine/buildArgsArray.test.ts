@@ -174,6 +174,24 @@ describe("buildArgsArray — defensive validation (renderer-bug safety net, not 
 });
 
 describe("buildArgsArray — full realistic preset, end-to-end", () => {
+    it("does NOT throw for the 'Convert video to MP3' preset — regression test for a real bug where -vn's conflictsWith previously included -crf/-preset, which are always-on-default flags with no valid inactive state, making this preset permanently unresolvable", () => {
+        const preset = ffmpegSchema.presets!.find(
+            (p: any) => p.name === "Convert video to MP3"
+        )!;
+        const result = buildArgsArray(ffmpegSchema, { ...preset.values, "-i": "/tmp/input.mp4" });
+        // Exact array, not just arrayContaining — order and completeness both matter here.
+        // -crf/-preset appear at their always-on defaults (23, medium); ffmpeg just ignores
+        // them harmlessly since there's no video stream to apply them to.
+        expect(result).toEqual([
+            "-i", "/tmp/input.mp4",
+            "-crf", "23",
+            "-preset", "medium",
+            "-vn",
+            "-b:a", "192k",
+            "audio.mp3",
+        ]);
+    });
+
     it("produces the exact expected array for the 'Compress video for email' preset", () => {
         const preset = ffmpegSchema.presets!.find(
             (p: any) => p.name === "Compress video for email"
