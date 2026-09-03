@@ -102,6 +102,12 @@ describe("buildArgsArray — unset conventions", () => {
         expect(result).toEqual(["-ar", "48000"]);
     });
 
+    it("-crf's unsetSentinel skips the flag entirely, closing the -crf/-q:v deadlock bug (regression)", () => {
+        const schema = { ...ffmpegSchema, flags: [getFlag("-crf")] };
+        const result = buildArgsArray(schema, { "-crf": "__unset__" });
+        expect(result).toEqual([]);
+    });
+
     it("optional number with enabled: false skips the flag, even with a nonzero value present", () => {
         const schema = { ...ffmpegSchema, flags: [getFlag("-r")] };
         const result = buildArgsArray(schema, { "-r": { value: 60, enabled: false } });
