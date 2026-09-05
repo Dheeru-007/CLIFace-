@@ -92,6 +92,17 @@ the engine and the UI both call the same code, never two independently-maintaine
     **The same `flag.range` clamp applies once the field is enabled** — this is easy to
     forget because it's a structurally separate component branch from the non-optional
     number field, so it's called out explicitly here rather than assumed.
+  - **Third case: non-optional number field with `unsetSentinel` (currently only `-crf`).**
+    This flag never gets its own direct control for reaching its sentinel — there is no
+    "reset to auto" button on `-crf` itself. The only path into `"__unset__"` is
+    `resetConflictingFlags` firing automatically when its conflict partner (`-q:v`) becomes
+    active. The UI requirement is purely reactive: when
+    `formValues["-crf"] === flag.unsetSentinel`, the `-crf` numeric input renders
+    disabled/greyed out (same visual treatment as `-q:v`'s own disabled state), with a
+    short inline note like "Disabled — using Simple Quality instead." Re-enabling `-crf`
+    happens only by disabling `-q:v`'s override checkbox, which is a normal user action
+    already covered by the `optional: true` case above — no new interaction needs to be
+    built for `-crf` itself.
 - **`type: "string"`** → plain text input. If `flag.validation.pattern` exists, validated on
   blur. **Resolved behavior on invalid input:** the input keeps showing exactly what the
   user typed, with an inline error message — it does **not** revert to the last valid
@@ -119,6 +130,35 @@ This is what actually keeps `ConflictError` unreachable. Merely greying out a co
 leaving its old active value sitting in `formValues` would mean a still-conflicting state
 reaches `buildArgsArray` the moment any other form change triggers a rebuild — the visual
 disable alone doesn't prevent that.
+
+**Deactivation direction — restoring what activation reset.** The activation-direction rule
+above (force-reset on activate) is not symmetric by default: for most conflict-reset
+targets, the "inactive" value it produces already *is* that flag's natural resting state —
+`-vf:scale`'s own schema default is `"__unset__"`, `-an`'s is `false`, and `-q:v` is off by
+default with reactivation always an explicit user action (checking its box again). None of
+these need anything to happen when the flag that disabled them becomes inactive again.
+
+`-crf` is the one exception in this schema, and it's worth being precise about why, so this
+doesn't get generalized into a system nobody else needs: `-crf`'s schema default (`23`) is
+**not** the same as its inactive value (`"__unset__"`) — the only flag in this schema where
+those two differ. That's exactly what caused two symptoms of one root cause: first,
+`-crf` had no way to *reach* `"__unset__"` at all (fixed above); second, once it could, it
+had no way *back* to `23` after the flag that disabled it (`-q:v`) was turned off again — it
+would sit permanently stuck at `"__unset__"` with no path to a real value.
+
+**Fix:** a `restoreValueFor(flagSchema)` function, the mirror of `inactiveValueFor` above,
+fires when a flag transitions from active → inactive (the deactivation-direction pass,
+`restoreConflictingFlags`, mirroring the existing activation pass). For each flag it
+conflicts with, it restores the schema default — but **only** for flags matching Section 3's
+third UI case (non-optional, has `unsetSentinel` — currently only `-crf`) **and** only when
+that flag is currently sitting at its own inactive value (never touching a conflicting flag
+that's independently active for some unrelated reason). For every other kind — boolean,
+enum, optional-number — `restoreValueFor` is a deliberate no-op: they already rest naturally
+at their inactive value, or intentionally require a manual reactivation, and don't need a
+symmetric restore path. **This scope limit is intentional and should stay narrow**: a future
+editor should not assume every conflict pair needs deactivation-triggered restoration —
+today, exactly one flag in one schema does, because it's architecturally unlike every other
+flag here (default ≠ inactive value).
 
 **Real bug found and fixed while validating this section against the actual schema:**
 `-vn`'s `conflictsWith` originally also listed `-crf` and `-preset` — but those two are

@@ -60,6 +60,55 @@ function inactiveValueFor(flagSchema: FlagSchema, currentRaw: unknown): unknown 
 }
 
 /**
+ * The mirror of inactiveValueFor, for the deactivation direction. Deliberately narrow in
+ * scope: only the "non-optional flag with unsetSentinel" case (Section 3's third UI case
+ * — currently only -crf) has a schema default that differs from its own inactive value,
+ * so it's the only kind that needs an explicit restore. Boolean/enum/optional-number
+ * flags already rest naturally at their inactive value (or intentionally require a
+ * manual reactivation, e.g. -q:v's checkbox) — for those, this returns undefined,
+ * meaning "no restore needed," not "restore to undefined."
+ */
+function restoreValueFor(flagSchema: FlagSchema): unknown {
+    if (
+        !flagSchema.optional &&
+        flagSchema.kind !== "boolean" &&
+        flagSchema.unsetSentinel !== undefined
+    ) {
+        return flagSchema.default;
+    }
+    return undefined;
+}
+
+/**
+ * Fires when `deactivatedFlagName` transitions from active to inactive. For each flag it
+ * conflicts with, restores it to its schema default IF that flag is currently sitting at
+ * its own inactive value AND restoreValueFor says it actually needs restoring (see scope
+ * note above). Never touches a conflicting flag that's independently active for some
+ * other reason — while a flag like -crf sits disabled, nothing else can have changed it
+ * (Section 3 specifies it as non-interactive in that state), so there's no risk of
+ * clobbering an unrelated edit by restoring unconditionally here.
+ */
+export function restoreConflictingFlags(
+    schema: ToolSchema,
+    formValues: FormValues,
+    deactivatedFlagName: string
+): FormValues {
+    const conflicts = findConflictsOf(schema, deactivatedFlagName);
+    if (conflicts.length === 0) return formValues;
+
+    const next = { ...formValues };
+    for (const conflictingFlag of conflicts) {
+        const resolved = resolveValue(conflictingFlag, next);
+        if (isFlagActive(conflictingFlag, resolved)) continue; // independently active — don't touch
+        const restored = restoreValueFor(conflictingFlag);
+        if (restored !== undefined) {
+            next[conflictingFlag.flag] = restored;
+        }
+    }
+    return next;
+}
+
+/**
  * Force-resets every flag that conflicts with `activatedFlagName` to its inactive
  * equivalent. Returns a new formValues object; does not mutate the input.
  */
@@ -78,6 +127,33 @@ export function resetConflictingFlags(
             formValues[conflictingFlag.flag]
         );
     }
+    return next;
+}
+
+/**
+ * The single entry point every field's onChange should call. Detects whether this change
+ * transitions the flag from inactive→active or active→inactive (using the same
+ * isFlagActive/resolveValue helpers as everywhere else), and fires resetConflictingFlags
+ * or restoreConflictingFlags accordingly. This exists specifically so the
+ * activation/deactivation wiring is a tested pure function, not something that only
+ * "looks correct" by reading through a React component's onChange prop — the component
+ * layer should never call resetConflictingFlags/restoreConflictingFlags directly itself.
+ */
+export function applyFieldChange(
+    schema: ToolSchema,
+    formValues: FormValues,
+    flagName: string,
+    newValue: unknown
+): FormValues {
+    const flagSchema = schema.flags.find((f) => f.flag === flagName);
+    if (!flagSchema) return { ...formValues, [flagName]: newValue };
+
+    const wasActive = isFlagActive(flagSchema, resolveValue(flagSchema, formValues));
+    const next = { ...formValues, [flagName]: newValue };
+    const isNowActive = isFlagActive(flagSchema, resolveValue(flagSchema, next));
+
+    if (!wasActive && isNowActive) return resetConflictingFlags(schema, next, flagName);
+    if (wasActive && !isNowActive) return restoreConflictingFlags(schema, next, flagName);
     return next;
 }
 
@@ -110,13 +186,37 @@ export function hasActiveConflicts(schema: ToolSchema, formValues: FormValues): 
  * observing buildArgsArray's exception behavior, so it stays correct independent of that
  * function's internals.
  */
+/**
+ * Whether a single required flag currently fails to resolve to a real, usable value —
+ * the per-flag check both canBuildArgs and the renderer's "required fields hidden in
+ * Advanced" badge need. Exported so ToolForm never reimplements this inline; a second,
+ * independently-drifting copy of "is this required field unresolved" is exactly the kind
+ * of duplication this project has repeatedly centralized (isFlagActive, resolveValue).
+ *
+ * Correctly handles a flag that is BOTH required:true and optional:true — a combination
+ * that shouldn't exist in a well-authored schema (required implies the user must supply
+ * it; optional+disabled-by-default implies the opposite), but isn't ruled out by the type
+ * system, so this stays correct regardless of what a future tool's schema does. A required
+ * flag that's also optional-shaped counts as unresolved when its enabled is false, even if
+ * it's holding some leftover numeric value — matching exactly what buildArgsArray's
+ * isSkipped + required-throw logic would do with the same input, so this predicate can
+ * never disagree with what actually happens on Run.
+ */
+export function isRequiredFieldUnresolved(
+    flagSchema: FlagSchema,
+    formValues: FormValues
+): boolean {
+    if (!("required" in flagSchema) || !(flagSchema as { required?: boolean }).required) {
+        return false;
+    }
+    const resolved = resolveValue(flagSchema, formValues);
+    if (flagSchema.optional && !resolved.enabled) return true;
+    return resolved.value === undefined || resolved.value === "";
+}
+
 export function canBuildArgs(schema: ToolSchema, formValues: FormValues): boolean {
     for (const flagSchema of schema.flags) {
-        if (!("required" in flagSchema) || !(flagSchema as { required?: boolean }).required) {
-            continue;
-        }
-        const resolved = resolveValue(flagSchema, formValues);
-        if (resolved.value === undefined || resolved.value === "") return false;
+        if (isRequiredFieldUnresolved(flagSchema, formValues)) return false;
     }
     return true;
 }

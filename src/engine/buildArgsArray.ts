@@ -27,6 +27,7 @@ export class RequiredFieldError extends Error {
 export type FlagKind = "standard" | "boolean" | "templated" | "positional";
 
 export interface FlagSchema {
+    // Engine-facing fields — read by buildArgsArray, resolveValue, isFlagActive, etc.
     flag: string;
     kind: FlagKind;
     type: string;
@@ -37,7 +38,20 @@ export interface FlagSchema {
     enabled?: boolean;
     range?: [number, number];
     argTemplate?: string;
-    validation?: { conflictsWith?: string[] };
+    validation?: { conflictsWith?: string[]; pattern?: string };
+
+    // UI-facing fields — read only by the renderer (Fields.tsx, ToolForm.tsx), never by
+    // any function in this file. Declared here anyway, not in a second parallel type,
+    // because FlagSchema is the single shared source of truth both layers import — the
+    // same reasoning that led to exporting resolveValue/isFlagActive instead of letting
+    // the UI reimplement them. Adding these fields doesn't change what any engine function
+    // reads or does at runtime; it just makes the type accurately describe the schema JSON,
+    // which already has these fields in practice.
+    label?: string;
+    required?: boolean;
+    plainEnglish?: string;
+    enumLabels?: string[];
+    advanced?: boolean;
 }
 
 export interface ToolSchema {

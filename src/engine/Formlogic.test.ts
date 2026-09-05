@@ -3,8 +3,11 @@ import ffmpegSchemaJson from "../schemas/ffmpeg-schema.json";
 import type { ToolSchema } from "./buildArgsArray";
 import {
     resetConflictingFlags,
+    restoreConflictingFlags,
+    applyFieldChange,
     hasActiveConflicts,
     canBuildArgs,
+    isRequiredFieldUnresolved,
     applyPreset,
     buildPreviewCommand,
 } from "./Formlogic";
@@ -61,6 +64,35 @@ describe("resetConflictingFlags", () => {
         expect(hasActiveConflicts(schema, result)).toBe(false);
     });
 
+    it("restores -crf to its default after -q:v is enabled then disabled (regression): -crf must not be permanently stuck at __unset__ with no path back", () => {
+        const schema = { ...ffmpegSchema, flags: [getFlag("-crf"), getFlag("-q:v")] };
+        const initial = { "-crf": 23, "-q:v": { value: 10, enabled: false } };
+
+        // Enable -q:v's override — -crf gets reset to unset, per the fix above.
+        const afterEnable = resetConflictingFlags(
+            schema,
+            { ...initial, "-q:v": { value: 10, enabled: true } },
+            "-q:v"
+        );
+        expect(afterEnable["-crf"]).toBe("__unset__");
+
+        // Now disable -q:v again — -crf must come back to its schema default (23), not stay
+        // stuck at "__unset__" with no way for the user to reach a real value again.
+        const afterDisable = restoreConflictingFlags(
+            schema,
+            { ...afterEnable, "-q:v": { value: 10, enabled: false } },
+            "-q:v"
+        );
+        expect(afterDisable["-crf"]).toBe(23);
+    });
+
+    it("restoreConflictingFlags is a no-op for flags that don't need restoring (e.g. -an, which already rests at false)", () => {
+        const schema = { ...ffmpegSchema, flags: [getFlag("-vn"), getFlag("-an")] };
+        const formValues = { "-vn": false, "-an": false };
+        const result = restoreConflictingFlags(schema, formValues, "-vn");
+        expect(result).toEqual(formValues);
+    });
+
     it("does nothing when the activated flag has no declared conflicts", () => {
         const schema = { ...ffmpegSchema, flags: [getFlag("-b:a")] };
         const formValues = { "-b:a": "256k" };
@@ -115,6 +147,39 @@ describe("canBuildArgs", () => {
         const schema = { ...ffmpegSchema, flags: [getFlag("-i"), getFlag("output")] };
         const result = canBuildArgs(schema, {});
         expect(result).toBe(false);
+    });
+
+    it("regression: a hypothetical required+optional flag disabled with a leftover numeric value must NOT be treated as resolved — this is exactly the state buildArgsArray would throw RequiredFieldError on", () => {
+        // Hand-built fixture: no real ffmpeg flag currently combines required+optional, but
+        // nothing in the schema type rules it out, so canBuildArgs must stay correct anyway.
+        const hypotheticalFlag = {
+            flag: "--hypothetical",
+            kind: "standard" as const,
+            type: "number",
+            required: true,
+            optional: true,
+            enabled: false,
+        };
+        const schema = { ...ffmpegSchema, flags: [hypotheticalFlag] };
+        const formValues = { "--hypothetical": { value: 0, enabled: false } };
+
+        expect(isRequiredFieldUnresolved(hypotheticalFlag, formValues)).toBe(true);
+        expect(canBuildArgs(schema, formValues)).toBe(false);
+    });
+
+    it("the same hypothetical flag counts as resolved once enabled with a real value", () => {
+        const hypotheticalFlag = {
+            flag: "--hypothetical",
+            kind: "standard" as const,
+            type: "number",
+            required: true,
+            optional: true,
+            enabled: false,
+        };
+        const schema = { ...ffmpegSchema, flags: [hypotheticalFlag] };
+        const formValues = { "--hypothetical": { value: 5, enabled: true } };
+
+        expect(canBuildArgs(schema, formValues)).toBe(true);
     });
 });
 
@@ -178,5 +243,41 @@ describe("buildPreviewCommand", () => {
         // Same shape/order, only the substituted token differs — proves no separate ordering
         // implementation exists between the placeholder and real-value cases.
         expect(withPlaceholder.replace('"<output filename>"', "out.mp4")).toBe(withRealValue);
+    });
+});
+
+describe("applyFieldChange — the actual field-update entry point components must call", () => {
+    it("firing reset when a field transitions inactive -> active (checking -q:v's override)", () => {
+        const schema = { ...ffmpegSchema, flags: [getFlag("-crf"), getFlag("-q:v")] };
+        const formValues = { "-crf": 23, "-q:v": { value: 10, enabled: false } };
+
+        const next = applyFieldChange(schema, formValues, "-q:v", { value: 10, enabled: true });
+
+        expect(next["-crf"]).toBe("__unset__");
+        expect(hasActiveConflicts(schema, next)).toBe(false);
+    });
+
+    it("firing restore when a field transitions active -> inactive (unchecking -q:v's override)", () => {
+        const schema = { ...ffmpegSchema, flags: [getFlag("-crf"), getFlag("-q:v")] };
+        const formValues = { "-crf": "__unset__", "-q:v": { value: 10, enabled: true } };
+
+        const next = applyFieldChange(schema, formValues, "-q:v", { value: 10, enabled: false });
+
+        expect(next["-crf"]).toBe(23);
+    });
+
+    it("does nothing extra for a field with no conflicts (plain passthrough)", () => {
+        const schema = { ...ffmpegSchema, flags: [getFlag("-b:a")] };
+        const formValues = { "-b:a": "192k" };
+        const next = applyFieldChange(schema, formValues, "-b:a", "256k");
+        expect(next).toEqual({ "-b:a": "256k" });
+    });
+
+    it("does nothing extra when the change doesn't cross an active/inactive boundary", () => {
+        const schema = { ...ffmpegSchema, flags: [getFlag("-crf"), getFlag("-q:v")] };
+        const formValues = { "-crf": "__unset__", "-q:v": { value: 10, enabled: true } };
+        const next = applyFieldChange(schema, formValues, "-q:v", { value: 20, enabled: true });
+        expect(next["-crf"]).toBe("__unset__");
+        expect(next["-q:v"]).toEqual({ value: 20, enabled: true });
     });
 });
