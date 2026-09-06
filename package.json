@@ -15,9 +15,14 @@
   "license": "ISC",
   "type": "module",
   "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
+    "@types/supertest": "^7.2.1",
     "@vitejs/plugin-react": "^6.1.1",
+    "express": "^5.2.1",
+    "supertest": "^7.2.2",
     "typescript": "^7.0.2",
     "vite": "^8.2.2",
     "vitest": "^4.1.11"
