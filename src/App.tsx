@@ -5,7 +5,7 @@ import type { ToolSchema } from "./engine/buildArgsArray";
 const ffmpegSchema = ffmpegSchemaJson as unknown as ToolSchema;
 
 function App() {
-    return <ToolForm schema={ffmpegSchema} />;
+    return <ToolForm schema={ffmpegSchema} toolId="ffmpeg" />;
 }
 
 export default App;

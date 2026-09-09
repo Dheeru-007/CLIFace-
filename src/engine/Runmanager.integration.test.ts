@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RunManager, InvalidRunRequestError } from "./Runmanager";
+import { readHistory } from "./Runhistory";
 import type { ToolSchema } from "./buildArgsArray";
 
 // A trivial, always-available "tool" schema — NOT ffmpeg, and NOT a raw shell (sh/cmd
@@ -28,15 +29,18 @@ const echoSchema: ToolSchema = {
 
 let tmpDir: string;
 let outputDir: string;
+let historyPath: string;
 
 beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cliface-test-tmp-"));
     outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "cliface-test-output-"));
+    historyPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cliface-test-history-")), "history.json");
 });
 
 afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     fs.rmSync(outputDir, { recursive: true, force: true });
+    fs.rmSync(path.dirname(historyPath), { recursive: true, force: true });
 });
 
 describe("RunManager — real subprocess integration", () => {
@@ -68,7 +72,7 @@ describe("RunManager — real subprocess integration", () => {
             ],
         };
 
-        const manager = new RunManager(tmpDir, outputDir);
+        const manager = new RunManager(tmpDir, outputDir, 30_000, historyPath);
 
         const eventPromise = new Promise<{ type: string;[key: string]: unknown }>((resolve) => {
             const check = (event: any) => {
@@ -101,7 +105,7 @@ describe("RunManager — real subprocess integration", () => {
     });
 
     it("queued run reports position via a queued event, then starts once the active run finishes", async () => {
-        const manager = new RunManager(tmpDir, outputDir);
+        const manager = new RunManager(tmpDir, outputDir, 30_000, historyPath);
         const events: Record<string, RunEventLog[]> = {};
 
         function track(runId: string) {
@@ -124,7 +128,7 @@ describe("RunManager — real subprocess integration", () => {
 
     it("cancelling a queued run removes it without ever touching the active process, and eventually cleans up lastEventByRun after the grace window", async () => {
         // Short retention (50ms) so this test doesn't need to wait 30 real seconds.
-        const manager = new RunManager(tmpDir, outputDir, 50);
+        const manager = new RunManager(tmpDir, outputDir, 50, historyPath);
         const events: RunEventLog[] = [];
 
         // Submit a long-running-ish active run, then a second one that will queue behind it.
@@ -147,7 +151,7 @@ describe("RunManager — real subprocess integration", () => {
     });
 
     it("lastEventByRun retains an entry through the grace window after a terminal state, then cleans up (fixes the fast-run 404 race)", async () => {
-        const manager = new RunManager(tmpDir, outputDir, 50);
+        const manager = new RunManager(tmpDir, outputDir, 50, historyPath);
 
         const runId = manager.submitRun("echo-tool", echoSchema, { output: "result.txt" });
 
@@ -167,7 +171,7 @@ describe("RunManager — real subprocess integration", () => {
     });
 
     it("regression: submitRun rejects a request missing required 'output' BEFORE spawning anything, instead of silently defaulting to a fake filename", () => {
-        const manager = new RunManager(tmpDir, outputDir);
+        const manager = new RunManager(tmpDir, outputDir, 30_000, historyPath);
 
         expect(() => manager.submitRun("echo-tool", echoSchema, {})).toThrow(
             InvalidRunRequestError
@@ -179,7 +183,7 @@ describe("RunManager — real subprocess integration", () => {
     });
 
     it("a valid request with output present still submits and runs normally (no regression from the new validation)", () => {
-        const manager = new RunManager(tmpDir, outputDir);
+        const manager = new RunManager(tmpDir, outputDir, 30_000, historyPath);
 
         const runId = manager.submitRun("echo-tool", echoSchema, { output: "ok.txt" });
         expect(typeof runId).toBe("string");
@@ -187,7 +191,7 @@ describe("RunManager — real subprocess integration", () => {
     });
 
     it("hasRecordOf: true for an active run, true for a queued run, false for an unknown id", () => {
-        const manager = new RunManager(tmpDir, outputDir);
+        const manager = new RunManager(tmpDir, outputDir, 30_000, historyPath);
         const activeId = manager.submitRun("echo-tool", echoSchema, { output: "a.txt" });
         const queuedId = manager.submitRun("echo-tool", echoSchema, { output: "b.txt" });
 
@@ -198,7 +202,7 @@ describe("RunManager — real subprocess integration", () => {
 
     it("regression: hasRecordOf stays true for a short grace window after a run completes, then eventually becomes false (fixes the fast-run race)", async () => {
         // Short retention window (50ms) so this test doesn't need to wait 30 real seconds.
-        const manager = new RunManager(tmpDir, outputDir, 50);
+        const manager = new RunManager(tmpDir, outputDir, 50, historyPath);
         const runId = manager.submitRun("echo-tool", echoSchema, { output: "result.txt" });
 
         await new Promise<void>((resolve) => {
@@ -228,7 +232,7 @@ describe("RunManager — real subprocess integration", () => {
             flags: [{ flag: "output", kind: "positional", type: "string", required: true }],
         };
 
-        const manager = new RunManager(tmpDir, outputDir);
+        const manager = new RunManager(tmpDir, outputDir, 30_000, historyPath);
         const runId = manager.submitRun("echo-tool", nonexistentBinarySchema, {
             output: "result.txt",
         });
@@ -247,6 +251,108 @@ describe("RunManager — real subprocess integration", () => {
         // The queue must still be able to advance afterward — a spawn failure shouldn't
         // leave RunManager stuck thinking a run is still active.
         expect((manager as any).activeRunId).toBe(null);
+    });
+
+    it("regression: a completed run writes a real, readable history entry", async () => {
+        // echoSchema exits cleanly but never actually creates the output file, so the rename
+        // step would legitimately fail and correctly log "error" — using the real
+        // file-writing schema instead, matching the earlier "spawns a real process" test.
+        const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "cliface-test-scripts-"));
+        const scriptPath = path.join(scriptDir, "write-test-file.cjs");
+        fs.writeFileSync(
+            scriptPath,
+            "const a=process.argv;require('fs').writeFileSync(a[a.length-1],'test output');"
+        );
+        const writeFileSchema: ToolSchema = {
+            binary: NODE,
+            flags: [
+                { flag: "scriptPath", kind: "positional", type: "string", required: true },
+                { flag: "output", kind: "positional", type: "string", required: true },
+            ],
+        };
+
+        const manager = new RunManager(tmpDir, outputDir, 30_000, historyPath);
+        const runId = manager.submitRun("echo-tool", writeFileSchema, {
+            scriptPath,
+            output: "result.txt",
+        });
+
+        await new Promise<void>((resolve) => {
+            manager.subscribe(runId, (event) => {
+                if (event.type === "completed" || event.type === "error") resolve();
+            });
+        });
+
+        const history = readHistory(historyPath);
+        expect(history).toHaveLength(1);
+        expect(history[0].tool).toBe("echo-tool");
+        expect(history[0].status).toBe("completed");
+        expect(history[0].outputPath).toContain("result.txt");
+
+        fs.rmSync(scriptDir, { recursive: true, force: true });
+    });
+
+    it("a run that fails (e.g. output never actually gets written) logs an 'error' history entry, not 'completed'", async () => {
+        const manager = new RunManager(tmpDir, outputDir, 30_000, historyPath);
+        // echoSchema exits 0 without ever creating the output file — the rename step fails,
+        // which must be logged as "error", not silently counted as a success.
+        const runId = manager.submitRun("echo-tool", echoSchema, { output: "result.txt" });
+
+        await new Promise<void>((resolve) => {
+            manager.subscribe(runId, (event) => {
+                if (event.type === "completed" || event.type === "error") resolve();
+            });
+        });
+
+        const history = readHistory(historyPath);
+        expect(history).toHaveLength(1);
+        expect(history[0].status).toBe("error");
+        expect(history[0].outputPath).toBeNull();
+    });
+
+    it("regression: a broken history file path (write failure) does not crash the run — logHistory's try/catch actually works, not just asserted in a comment", async () => {
+        // Force a real fs.appendFileSync failure: point historyFilePath at a path where the
+        // PARENT is a plain file, not a directory — appendFileSync throws ENOTDIR in this
+        // case. This is a genuine disk-error simulation, not a mock.
+        const blockerDir = fs.mkdtempSync(path.join(os.tmpdir(), "cliface-test-blocker-"));
+        const notADirectory = path.join(blockerDir, "im-a-file-not-a-directory");
+        fs.writeFileSync(notADirectory, "blocking file");
+        const brokenHistoryPath = path.join(notADirectory, "history.json");
+
+        const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "cliface-test-scripts-"));
+        const scriptPath = path.join(scriptDir, "write-test-file.cjs");
+        fs.writeFileSync(
+            scriptPath,
+            "const a=process.argv;require('fs').writeFileSync(a[a.length-1],'test output');"
+        );
+        const writeFileSchema: ToolSchema = {
+            binary: NODE,
+            flags: [
+                { flag: "scriptPath", kind: "positional", type: "string", required: true },
+                { flag: "output", kind: "positional", type: "string", required: true },
+            ],
+        };
+
+        const manager = new RunManager(tmpDir, outputDir, 30_000, brokenHistoryPath);
+        const runId = manager.submitRun("echo-tool", writeFileSchema, {
+            scriptPath,
+            output: "result.txt",
+        });
+
+        // The real assertion: this must resolve to "completed" via the normal event flow,
+        // proving history-write failure never propagated up and crashed/blocked the run
+        // itself — if logHistory's try/catch didn't work, this would either throw
+        // synchronously inside the close handler or the test would hang.
+        const finalEvent = await new Promise<{ type: string }>((resolve) => {
+            manager.subscribe(runId, (event) => {
+                if (event.type === "completed" || event.type === "error") resolve(event as any);
+            });
+        });
+
+        expect(finalEvent.type).toBe("completed");
+
+        fs.rmSync(blockerDir, { recursive: true, force: true });
+        fs.rmSync(scriptDir, { recursive: true, force: true });
     });
 });
 

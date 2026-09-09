@@ -33,20 +33,26 @@ describe("schemaLoader", () => {
 describe("Express server — real HTTP requests via supertest", () => {
     let tmpDir: string;
     let outputDir: string;
+    let historyPath: string;
     const schemasDir = path.join(__dirname, "..", "schemas");
 
     beforeEach(() => {
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cliface-server-tmp-"));
         outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "cliface-server-output-"));
+        historyPath = path.join(
+            fs.mkdtempSync(path.join(os.tmpdir(), "cliface-server-history-")),
+            "history.json"
+        );
     });
 
     afterEach(() => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
         fs.rmSync(outputDir, { recursive: true, force: true });
+        fs.rmSync(path.dirname(historyPath), { recursive: true, force: true });
     });
 
     it("POST /api/run rejects an unknown toolId with 400, never reaching RunManager", async () => {
-        const { app } = createServer(tmpDir, outputDir, schemasDir);
+        const { app } = createServer(tmpDir, outputDir, schemasDir, historyPath);
         const res = await request(app)
             .post("/api/run")
             .send({ toolId: "not-a-real-tool", formValues: {} });
@@ -56,13 +62,13 @@ describe("Express server — real HTTP requests via supertest", () => {
     });
 
     it("POST /api/run rejects a malformed body (missing toolId) with 400", async () => {
-        const { app } = createServer(tmpDir, outputDir, schemasDir);
+        const { app } = createServer(tmpDir, outputDir, schemasDir, historyPath);
         const res = await request(app).post("/api/run").send({ formValues: {} });
         expect(res.status).toBe(400);
     });
 
     it("POST /api/run rejects a request missing required formValues fields with 400 (InvalidRunRequestError surfaced correctly)", async () => {
-        const { app } = createServer(tmpDir, outputDir, schemasDir);
+        const { app } = createServer(tmpDir, outputDir, schemasDir, historyPath);
         const res = await request(app)
             .post("/api/run")
             .send({ toolId: "ffmpeg", formValues: {} }); // no -i, no output
@@ -72,7 +78,7 @@ describe("Express server — real HTTP requests via supertest", () => {
     });
 
     it("POST /api/run accepts a valid request and returns a runId, never accepting a client-supplied schema", async () => {
-        const { app } = createServer(tmpDir, outputDir, schemasDir);
+        const { app } = createServer(tmpDir, outputDir, schemasDir, historyPath);
         const res = await request(app)
             .post("/api/run")
             // Deliberately including a "schema" field with a malicious binary, to confirm the
@@ -93,7 +99,7 @@ describe("Express server — real HTTP requests via supertest", () => {
         // the CLIENT disconnects), so supertest's normal completion model can't work here
         // regardless of how the response is parsed. A real http.Server + raw http.get gives
         // full control to close the socket manually once an event has been captured.
-        const { app } = createServer(tmpDir, outputDir, schemasDir);
+        const { app } = createServer(tmpDir, outputDir, schemasDir, historyPath);
         const httpServer = app.listen(0);
         const port = (httpServer.address() as any).port;
 
@@ -130,19 +136,19 @@ describe("Express server — real HTTP requests via supertest", () => {
     });
 
     it("POST /api/run/:id/cancel on a not-found runId returns 200, not an error (deliberate no-op per spec)", async () => {
-        const { app } = createServer(tmpDir, outputDir, schemasDir);
+        const { app } = createServer(tmpDir, outputDir, schemasDir, historyPath);
         const res = await request(app).post("/api/run/nonexistent-id/cancel").send();
         expect(res.status).toBe(200);
     });
 
     it("regression: GET /api/run/:id/events for an unknown runId returns 404 immediately, instead of hanging with headers queued but never flushed", async () => {
-        const { app } = createServer(tmpDir, outputDir, schemasDir);
+        const { app } = createServer(tmpDir, outputDir, schemasDir, historyPath);
         const res = await request(app).get("/api/run/totally-unknown-id/events");
         expect(res.status).toBe(404);
     });
 
     it("regression: GET /api/run/:id/events flushes headers immediately for a legitimate run, even before any real event fires", async () => {
-        const { app } = createServer(tmpDir, outputDir, schemasDir);
+        const { app } = createServer(tmpDir, outputDir, schemasDir, historyPath);
         const httpServer = app.listen(0);
         const port = (httpServer.address() as any).port;
 

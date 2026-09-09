@@ -7,14 +7,19 @@ import { createSchemaLoader, UnknownToolError } from "./schemaloader";
  * hardcoded) so tests can point this at throwaway temp directories instead of the real
  * ~/CLIFace paths — same testability principle used throughout this project.
  */
-export function createServer(tmpDir: string, outputDir: string, schemasDir: string): {
+export function createServer(
+    tmpDir: string,
+    outputDir: string,
+    schemasDir: string,
+    historyFilePath?: string
+): {
     app: Express;
     runManager: RunManager;
 } {
     const app = express();
     app.use(express.json());
 
-    const runManager = new RunManager(tmpDir, outputDir);
+    const runManager = new RunManager(tmpDir, outputDir, 30_000, historyFilePath);
     const loadSchema = createSchemaLoader(schemasDir);
 
     app.post("/api/run", (req, res) => {

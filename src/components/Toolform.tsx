@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import type { ToolSchema, FormValues } from "../engine/buildArgsArray";
 import {
     applyFieldChange,
@@ -9,6 +9,14 @@ import {
     applyPreset,
 } from "../engine/Formlogic";
 import { FieldRenderer } from "./Fields";
+
+type RunStatus =
+    | { state: "idle" }
+    | { state: "queued"; ahead: number }
+    | { state: "running"; progress?: Record<string, unknown> }
+    | { state: "completed"; outputPath: string }
+    | { state: "cancelled" }
+    | { state: "error"; message: string };
 
 function initialFormValues(schema: ToolSchema): FormValues {
     const values: FormValues = {};
@@ -22,10 +30,95 @@ function initialFormValues(schema: ToolSchema): FormValues {
     return values;
 }
 
-export function ToolForm({ schema }: { schema: ToolSchema }) {
+export function ToolForm({ schema, toolId }: { schema: ToolSchema; toolId: string }) {
     const [formValues, setFormValues] = useState<FormValues>(() => initialFormValues(schema));
     const [showAdvanced, setShowAdvanced] = useState(false);
     const [presetError, setPresetError] = useState<string | null>(null);
+    const [runStatus, setRunStatus] = useState<RunStatus>({ state: "idle" });
+    const [runId, setRunId] = useState<string | null>(null);
+    const eventSourceRef = useRef<EventSource | null>(null);
+
+    // Clean up any open SSE connection if the component unmounts mid-run.
+    useEffect(() => {
+        return () => {
+            eventSourceRef.current?.close();
+        };
+    }, []);
+
+    async function handleRun() {
+        setRunStatus({ state: "queued", ahead: 0 });
+
+        let response: Response;
+        try {
+            response = await fetch("/api/run", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                // Only toolId + formValues — never a schema object. The server loads the real
+                // schema itself from its own curated allowlist; sending a schema here wouldn't
+                // do anything even if we tried, since the server ignores that field entirely.
+                body: JSON.stringify({ toolId, formValues }),
+            });
+        } catch (err) {
+            setRunStatus({ state: "error", message: "Could not reach the server." });
+            return;
+        }
+
+        if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            setRunStatus({ state: "error", message: body.error ?? `Request failed (${response.status}).` });
+            return;
+        }
+
+        const { runId: newRunId } = await response.json();
+        setRunId(newRunId);
+
+        const es = new EventSource(`/api/run/${newRunId}/events`);
+        eventSourceRef.current = es;
+
+        es.onmessage = (msg) => {
+            const event = JSON.parse(msg.data);
+            switch (event.type) {
+                case "queued":
+                    setRunStatus({ state: "queued", ahead: event.ahead });
+                    break;
+                case "started":
+                    setRunStatus({ state: "running" });
+                    break;
+                case "progress":
+                    setRunStatus({ state: "running", progress: event });
+                    break;
+                case "completed":
+                    setRunStatus({ state: "completed", outputPath: event.outputPath });
+                    es.close();
+                    break;
+                case "cancelled":
+                    setRunStatus({ state: "cancelled" });
+                    es.close();
+                    break;
+                case "error":
+                    setRunStatus({ state: "error", message: event.message });
+                    es.close();
+                    break;
+            }
+        };
+
+        es.onerror = () => {
+            // A dropped connection mid-run isn't necessarily a failed run — the process may
+            // still be running server-side. Surface it distinctly from a real "error" event
+            // rather than claiming the run itself failed.
+            setRunStatus((current) =>
+                current.state === "running" || current.state === "queued"
+                    ? { state: "error", message: "Lost connection to the server." }
+                    : current
+            );
+            es.close();
+        };
+    }
+
+    async function handleCancel() {
+        if (!runId) return;
+        await fetch(`/api/run/${runId}/cancel`, { method: "POST" });
+    }
 
     // The ONLY place any field's change is applied. Every FieldRenderer's onChange prop
     // points here — never directly at setFormValues, and never directly at
@@ -121,9 +214,40 @@ export function ToolForm({ schema }: { schema: ToolSchema }) {
                 <pre>{previewCommand}</pre>
             </div>
 
-            <button type="button" disabled={!canRun} className="run-button">
-                Run
-            </button>
+            <div className="run-controls">
+                {(runStatus.state === "queued" || runStatus.state === "running") ? (
+                    <button type="button" onClick={handleCancel} className="cancel-button">
+                        Cancel
+                    </button>
+                ) : (
+                    <button type="button" disabled={!canRun} onClick={handleRun} className="run-button">
+                        Run
+                    </button>
+                )}
+            </div>
+
+            <div className="run-status">
+                {runStatus.state === "queued" && <p>Queued — {runStatus.ahead} run(s) ahead of this one.</p>}
+                {runStatus.state === "running" && (
+                    <p>
+                        Running…
+                        {runStatus.progress && (
+                            <span className="progress-detail">
+                                {" "}
+                                {Object.entries(runStatus.progress)
+                                    .filter(([k]) => k !== "type")
+                                    .map(([k, v]) => `${k}: ${v}`)
+                                    .join(", ")}
+                            </span>
+                        )}
+                    </p>
+                )}
+                {runStatus.state === "completed" && (
+                    <p className="success">Done — saved to {runStatus.outputPath}</p>
+                )}
+                {runStatus.state === "cancelled" && <p>Cancelled.</p>}
+                {runStatus.state === "error" && <p className="error">Error: {runStatus.message}</p>}
+            </div>
         </div>
     );
 }

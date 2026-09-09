@@ -10,6 +10,7 @@ import { decideCancelAction } from "./decideCancelAction";
 import { enqueueRun, positionInQueue, removeFromQueue, dequeueNext } from "./queue";
 import { buildArgsArray, type ToolSchema, type FormValues } from "./buildArgsArray";
 import { canBuildArgs, hasActiveConflicts } from "./Formlogic";
+import { formatHistoryEntry, appendHistoryEntry } from "./Runhistory";
 
 const SIGINT_TO_SIGKILL_TIMEOUT_MS = 5000;
 
@@ -63,6 +64,7 @@ export class RunManager extends EventEmitter {
     // state instead of silently missing it.
     private lastEventByRun = new Map<string, RunEvent>();
     private terminalEventRetentionMs: number;
+    private historyFilePath: string;
 
     /**
      * `terminalEventRetentionMs` is how long a terminal event (completed/error/cancelled)
@@ -73,11 +75,17 @@ export class RunManager extends EventEmitter {
      * immediate deletion did, just with a grace window instead of zero window. Configurable
      * (not hardcoded) so tests can use a short value instead of waiting 30 real seconds.
      */
-    constructor(tmpDir: string, outputDir: string, terminalEventRetentionMs = 30_000) {
+    constructor(
+        tmpDir: string,
+        outputDir: string,
+        terminalEventRetentionMs = 30_000,
+        historyFilePath?: string
+    ) {
         super();
         this.tmpDir = tmpDir;
         this.outputDir = outputDir;
         this.terminalEventRetentionMs = terminalEventRetentionMs;
+        this.historyFilePath = historyFilePath ?? path.join(outputDir, "..", "history.json");
         fs.mkdirSync(tmpDir, { recursive: true });
         fs.mkdirSync(outputDir, { recursive: true });
     }
@@ -193,6 +201,7 @@ export class RunManager extends EventEmitter {
             args = buildArgsArray(pending.schema, clonedFormValues);
         } catch (err) {
             this.emitEvent(runId, { type: "error", message: String(err) });
+            this.logHistory(pending.toolId, pending.formValues, "error", null);
             this.finishAndAdvance();
             return;
         }
@@ -233,6 +242,7 @@ export class RunManager extends EventEmitter {
                 type: "error",
                 message: `Failed to start process: ${err.message}`,
             });
+            this.logHistory(pending.toolId, pending.formValues, "error", null);
 
             this.pendingRuns.delete(runId);
             this.scheduleLastEventCleanup(runId);
@@ -253,8 +263,10 @@ export class RunManager extends EventEmitter {
                 try {
                     fs.renameSync(tmpOutputPath, finalPath);
                     this.emitEvent(runId, { type: "completed", outputPath: finalPath });
+                    this.logHistory(pending.toolId, pending.formValues, "completed", finalPath);
                 } catch (err) {
                     this.emitEvent(runId, { type: "error", message: String(err) });
+                    this.logHistory(pending.toolId, pending.formValues, "error", null);
                 }
             } else {
                 // Non-zero exit (includes the SIGINT/SIGKILL cancel path) — clean up the partial
@@ -264,6 +276,12 @@ export class RunManager extends EventEmitter {
                     type: "error",
                     message: `Process exited with code ${code}`,
                 });
+                this.logHistory(
+                    pending.toolId,
+                    pending.formValues,
+                    code === null ? "cancelled" : "error",
+                    null
+                );
             }
 
             this.pendingRuns.delete(runId);
@@ -285,6 +303,20 @@ export class RunManager extends EventEmitter {
         const { next, remaining } = dequeueNext(this.queue);
         this.queue = remaining;
         if (next) this.startRun(next);
+    }
+
+    private logHistory(
+        toolId: string,
+        formValues: FormValues,
+        status: "completed" | "error" | "cancelled",
+        outputPath: string | null
+    ): void {
+        try {
+            appendHistoryEntry(this.historyFilePath, formatHistoryEntry(toolId, formValues, status, outputPath));
+        } catch {
+            // History logging is best-effort — a disk/permissions issue writing history must
+            // never take down a run that otherwise succeeded or failed normally.
+        }
     }
 
     private scheduleLastEventCleanup(runId: string): void {
